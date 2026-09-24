@@ -1,0 +1,47 @@
+<data>
+  <CSVFileName FileName="RenamePC_CSV.csv"/>
+  <LaptopModelsFile FileName="notebook.txt"/>
+  <LaptopModelsXMLInPlace>
+    <LaptopModel Win32CompSysModel="H61MLC"/>
+    <LaptopModel Win32CompSysModel="20J9S07Q00"/>
+    <LaptopModel Win32CompSysModel="20F5S5R200"/>
+    <LaptopModel Win32CompSysModel="20HMS0S300"/>
+    <LaptopModel Win32CompSysModel="Latitude E6430"/>
+    <LaptopModel Win32CompSysModel="20CLS2H300"/>
+    <LaptopModel Win32CompSysModel="HP ProBook 6550b"/>
+    <LaptopModel Win32CompSysModel="R59P/R60P/R61P"/>
+    <LaptopModel Win32CompSysModel="R55S"/>
+    <LaptopModel Win32CompSysModel="HP ProBook 430 G5"/>
+    <LaptopModel Win32CompSysModel="Latitude E7240"/>
+    <LaptopModel Win32CompSysModel="HP ProBook 4510s"/>
+    <LaptopModel Win32CompSysModel="HP EliteBook 2540p"/>
+  </LaptopModelsXMLInPlace>
+  <InfoDomainConnection>
+    <GoToDomain DomainName="dgrp" DNSSuffix="net.loc"/>
+    <ApprovedDomainUser UserName="" SecrString=""/>
+  </InfoDomainConnection>
+  <CharSetDepends>
+    <DesktopVariant>DOP</DesktopVariant>
+    <NotebookVariant>NIJ</NotebookVariant>
+  </CharSetDepends>
+  <SiteIdentification>
+    <SiteInfo IPMaskID="192.168.0." SiteID="1091"/>
+    <SiteInfo IPMaskID="192.168.40." SiteID="1097"/>
+    <SiteInfo IPMaskID="192.168.36." SiteID="2078"/>
+    <SiteInfo IPMaskID="192.168.144." SiteID="1097"/>
+    <SiteInfo IPMaskID="192.168.124." SiteID="2078"/>
+  </SiteIdentification>
+  <OUPATHIDs>
+    <OUInfo SiteID='1091' OrgUnitPath='OU=desktop-1091,DC=loc' FilterType='DesktopVariant'/>
+    <OUInfo SiteID='1097' OrgUnitPath='OU=desktop-1097,DC=loc' FilterType='DesktopVariant'/>
+    <OUInfo SiteID='2078' OrgUnitPath='OU=desktop-2078,DC=loc' FilterType='DesktopVariant'/>
+    <OUInfo SiteID='1097' OrgUnitPath='OU=notebook-1097,DC=loc' FilterType='NotebookVariant'/>
+    <OUInfo SiteID='1091' OrgUnitPath='OU=notebook-1091,DC=loc' FilterType='NotebookVariant'/>
+    <OUInfo SiteID='2078' OrgUnitPath='OU=notebook-2078,DC=loc' FilterType='NotebookVariant'/>
+  </OUPATHIDs>
+  <NTPServer ServerAddress="1"/>
+  <AppAdditionalInstallation>
+    <CMDLine Id='1' Type="install" value='setup.exe /configure o365_semi-annual_x64.xml'/>
+    <CMDLine Id='2' Type="uninstall" value='setup.exe /configure o365_remove-all.xml'/>
+  </AppAdditionalInstallation>
+</data>
