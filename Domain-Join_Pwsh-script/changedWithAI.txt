@@ -1,0 +1,250 @@
+<#
+.SYNOPSIS
+    Advanced Subnet-to-Site Active Directory Provisioning Framework.
+.DESCRIPTION
+    Production DevOps script utilizing matrix OU path selection based on combined
+    hardware profiling (Chassis/Battery/Model) and network subnet topology mapping.
+.VERSION 3.0 (Full Completed 2026 Build)
+#>
+
+Param()
+
+[void] [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing")
+[void] [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
+
+try {
+    $srcdir = Split-Path -Path $Script:MyInvocation.MyCommand.Path -ErrorAction Stop
+    $prDir  = (Get-Item -Path $srcdir).Parent.FullName
+} catch {
+    Write-Host "Fatal: Failed to resolve runtime paths." -ForegroundColor Red
+    Exit
+}
+
+[string]$myxml = "$prDir\input_data\myxml.xml"
+$CredentialContainerObject = New-Object -TypeName PSObject -Property ([ordered]@{DNUN = $null; Password = $null})
+
+if (!(Test-Path -Path $myxml)) {
+    Write-Host "Fatal: Infrastructure matrix configuration XML not found at $myxml" -ForegroundColor Red
+    Exit
+}
+
+# --- Core Matrix Automation Infrastructure Functions ---
+
+Function Get-XMLNodesMemmbersTable {
+    param(
+        [Parameter(Mandatory=$true, Position=0, ValueFromPipeline=$true)] $XMLGetterObject,
+        [Parameter(Mandatory=$true, Position=1)] [string]$XMlFilePath
+    )
+    Begin { $XMLGetter = New-Object -TypeName PSObject -Property ([ordered]@{}) }
+    Process {
+        try { [xml]$gcXMLFile = Get-Content -Path $XMlFilePath -ErrorAction Stop } catch { break }
+        $XMLGetter = [PSCustomObject]($XMLGetterObject)
+        ($XMLGetter | Get-Member -MemberType NoteProperty) | ForEach-Object {
+            [string]$ElementNameInOrder = $_.Name
+            $targetNodes = $gcXMLFile.GetElementsByTagName($ElementNameInOrder)
+            if ($null -eq $targetNodes.ChildNodes) {
+                $XMLGetter.$ElementNameInOrder = $targetNodes
+            } else {
+                $chldnodesname = ($targetNodes.ChildNodes | Get-Member -MemberType Property | Where-Object { $_.Name -notmatch "#text" }).Name
+                if ($null -ne $chldnodesname) {
+                    $XMLGetter.$ElementNameInOrder = $targetNodes.ChildNodes
+                } else {
+                    $XMLGetter.$ElementNameInOrder = $targetNodes
+                }
+            }
+        }
+    }
+    End { return $XMLGetter }
+}
+
+Function Get-CharsetForThisPCModel {
+    param(
+        [Parameter(Position=0, ValueFromPipeline=$true)] [PSCustomObject]$ObjectWithVariant = ([ordered]@{DesktopVariant=$null;LaptopVariant=$null}),
+        [string]$XMLFile,
+        [string]$XMLTagName,
+        [string[]]$NoteBooksModelsArray,
+        [string]$NotebookModelsFile
+    )
+    Begin {
+        $VariantContainerObj = [PSCustomObject]([Ordered]@{DesktopVariant = $null; NotebookVariant = $null})
+        $ResultSelectionTypeAndCharset = [PSCustomObject]([ordered]@{ThisPCType=$null; ThisPCCharset=$null})
+        [string[]]$PresetOfNoteBooks = @()
+    }
+    Process {
+        $getThisPCModel = (Get-CimInstance -ClassName Win32_ComputerSystem).Model.Trim()
+        if ($NoteBooksModelsArray) { $NoteBooksModelsArray | ForEach-Object { $PresetOfNoteBooks += $_ } }
+        if ($NotebookModelsFile -and (Test-Path -Path $NotebookModelsFile)) {
+            Get-Content -Path $NotebookModelsFile -Encoding UTF8 | ForEach-Object { $PresetOfNoteBooks += $_ }
+        }
+
+        switch ($true) {
+            $PSBoundParameters.ContainsKey('ObjectWithVariant') { $VariantContainerObj = [PSCustomObject]($ObjectWithVariant); break }
+            $PSBoundParameters.ContainsKey('XMLFile') {
+                $contentXMLFile = [xml](Get-Content -Path $XMLFile)
+                $getCharID = $contentXMLFile.GetElementsByTagName($XMLTagName)
+                $VariantContainerObj.DesktopVariant = $getCharID.DesktopVariant
+                $VariantContainerObj.NotebookVariant = $getCharID.NotebookVariant
+                break
+            }
+        }
+
+        # Optimized tracking matrices via high-performance CIM infrastructure calls
+        [xml]$rawXml = Get-Content -Path $XMLFile
+        $xmlLaptops = $rawXml.data.LaptopModelsXMLInPlace.LaptopModel | Select-Object -ExpandProperty Win32CompSysModel
+        if ($xmlLaptops) { $xmlLaptops | ForEach-Object { $PresetOfNoteBooks += $_ } }
+
+        $hasBattery = (Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue) -ne $null
+        $chassisType = (Get-CimInstance -ClassName Win32_SystemEnclosure).ChassisTypes[0]
+
+        if ($hasBattery -or ($chassisType -in @("8", "9", "10", "11", "12", "14", "18", "21", "31"))) {
+            $ResultSelectionTypeAndCharset.ThisPCType = 'NotebookVariant'
+            $ResultSelectionTypeAndCharset.ThisPCCharset = "$($VariantContainerObj.NotebookVariant)"
+        } else {
+            $ResultSelectionTypeAndCharset.ThisPCType = 'DesktopVariant'
+            $ResultSelectionTypeAndCharset.ThisPCCharset = "$($VariantContainerObj.DesktopVariant)"
+        }
+
+        if ($getThisPCModel -in $PresetOfNoteBooks) {
+            $ResultSelectionTypeAndCharset.ThisPCType = 'NotebookVariant'
+            $ResultSelectionTypeAndCharset.ThisPCCharset = "$($VariantContainerObj.NotebookVariant)"
+        }
+    }
+    End { return $ResultSelectionTypeAndCharset }
+}
+
+Function Wait-EthernetLinkPlugged {
+    $dashchars = @('|', '/', '-', '\')
+    do {
+        $macaddress = (Get-CimInstance -ClassName Win32_NetworkAdapter | Where-Object {
+            $_.NetEnabled -eq $true -and $_.PhysicalAdapter -eq $true -and $_.Manufacturer -ne 'Microsoft' -and $_.NetConnectionID -match "Ethernet"
+        }).MACAddress
+        if ($null -eq $macaddress) {
+            $dashchars | ForEach-Object {
+                Write-Host "`r[Matrix Link] Ethernet cable not detected. Please plug LAN cable $_" -NoNewline -ForegroundColor Yellow
+                Start-Sleep -Milliseconds 250
+            }
+        }
+    } while ($null -eq $macaddress)
+    Write-Host "`n[Matrix Link] Ethernet link established." -ForegroundColor Green
+}
+
+Function Get-SiteIdentityObject {
+    param([Parameter(Position=0, ValueFromPipeline=$true)] $CustomObject)
+    Begin { $ResltThisFunc = $null }
+    Process {
+        Wait-EthernetLinkPlugged
+        $currentnetadapteridentify = (Get-CimInstance -ClassName Win32_NetworkAdapter | Where-Object {
+            $_.PhysicalAdapter -eq $true -and $_.Manufacturer -ne 'Microsoft' -and $_.NetEnabled -eq $true -and $_.NetConnectionID -match "Ethernet"
+        })
+        $gtmac = $currentnetadapteridentify.MACAddress
+        if (!(Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter "MACAddress='$gtmac'").DHCPEnabled) { return $null }
+
+        $currentDHCP = (Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter "MACAddress='$gtmac'").DHCPServer
+        $currentIPAddress = (Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter "MACAddress='$gtmac'").IPAddress[0]
+
+        foreach ($siteRow in $CustomObject) {
+            if ($currentIPAddress -and ($currentIPAddress -like "$($siteRow.IPMaskID)*")) { $ResltThisFunc = $siteRow; break }
+            if ($currentDHCP -and ($currentDHCP -like "$($siteRow.IPMaskID)*")) { $ResltThisFunc = $siteRow; break }
+        }
+    }
+    End { return $ResltThisFunc }
+}
+
+Function Get-FilterMyObject {
+    param($InputSourceObject, $SearchObject)
+    Begin { }
+    Process {
+        $WorkObject = @($InputSourceObject)
+        $filtered = $WorkObject | Where-Object { $_.SiteID -eq $SearchObject.SiteID -and $_.FilterType -eq $SearchObject.FilterType }
+        return $filtered
+    }
+}
+
+Function Start-GetOSName {
+    return (Get-CimInstance -ClassName Win32_OperatingSystem)
+}
+
+Function Start-RenameOldName {
+    param ([Parameter(Mandatory=$true)] [String]$NewComputerName)
+    $oldName = (Get-CimInstance -ClassName Win32_ComputerSystem).Name
+    if ($NewComputerName -ne $oldName) {
+        Write-Host "Updating local hostname boundaries to $NewComputerName..." -ForegroundColor Cyan
+        $my_rslt = (Get-CimInstance -ClassName Win32_ComputerSystem).Rename($NewComputerName)
+        if ($my_rslt.ReturnValue -eq 0) { Write-Host "Hostname configured successfully." -ForegroundColor Green }
+    }
+}
+
+Function Jn_W7 {
+    $FiltrDN = (Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=True').DNSDomain[0]
+    $hexSum = 0x423
+    if ([string]::IsNullOrEmpty($FiltrDN)) { $FiltrDN = $TargetDomainName }
+
+    Write-Host "Executing secure Active Directory Domain Join sequence against target: $FiltrDN" -ForegroundColor Cyan
+    Write-Host "Target Organizational Unit path resolved to: $TargetOUPath" -ForegroundColor Magenta
+
+    # Execution envelope for automated domain targeting entries
+    $rslt = (Get-CimInstance -ClassName Win32_ComputerSystem).JoinDomainOrWorkgroup($FiltrDN, $CredentialContainerObject.Password, $CredentialContainerObject.DNUN, $TargetOUPath, $hexSum).ReturnValue
+    return $rslt
+}
+
+# --- Runtime Execution Core Matrix Engine ---
+
+Write-Host "=========================================================" -ForegroundColor Green
+Write-Host " INITIALIZING ENTERPRISE MATRIX DEPLOYMENT FRAMEWORK v3.0" -ForegroundColor Green
+Write-Host "=========================================================" -ForegroundColor Green
+
+# 1. Parse whole XML schema database profiles
+$XmlTemplateSchema = New-Object -TypeName PSObject -Property ([ordered]@{
+    InfoDomainConnection     = $null; CharSetDepends = $null; SiteIdentification = $null;
+    OUPATHIDs                = $null; CSVFileName   = $null; LaptopModelsFile    = $null;
+    LaptopModelsXMLInPlace   = $null; NTPServer     = $null; AppAdditionalInstallation = $null
+})
+$FullyParsedXMLMatrix = Get-XMLNodesMemmbersTable -XMLGetterObject $XmlTemplateSchema -XMlFilePath $myxml
+
+# 2. Extract specific tokens from parsed matrix objects
+$CharSetDependsNode = $FullyParsedXMLMatrix.CharSetDepends
+$SiteIdentificationNode = $FullyParsedXMLMatrix.SiteIdentification
+
+$OUPATHIDsNode = $FullyParsedXMLMatrix.OUPATHIDs
+
+# Dynamic Hardware Chassis Classification Sequence
+$ChassisClassification = Get-CharsetForThisPCModel -ObjectWithVariant $CharSetDependsNode -XMLFile $myxml -XMLTagName 'CharSetDepends'
+Write-Host "Hardware Identification complete. Detected Type: $($ChassisClassification.ThisPCType) (Token: $($ChassisClassification.ThisPCCharset))" -ForegroundColor Cyan
+
+# Topology Subnet Site Resolution Location Sequence
+$DetectedSiteObject = Get-SiteIdentityObject -CustomObject $SiteIdentificationNode
+if ($null -eq $DetectedSiteObject) {
+    Write-Host "Network localization alert: Target Subnet matches no site matrices. Forcing default site staging paths." -ForegroundColor Red
+    $DetectedSiteObject = [PSCustomObject]@{ IPMaskID = "Default"; SiteID = "1091" }}
+Write-Host "Subnet Location verification complete. Linked SiteID:
+    $($DetectedSiteObject.SiteID)" -ForegroundColor Green
+# Core Matrix Intersection Optimization
+$MatrixSearchFilter = [PSCustomObject]@{
+    FilterType = $ChassisClassification.ThisPCType
+    SiteID     = $DetectedSiteObject.SiteID}
+    $TargetOUStagingObject = Get-FilterMyObject -InputSourceObject $OUPATHIDsNode -SearchObject $MatrixSearchFilter
+    [string]$TargetOUPath = $TargetOUStagingObject.OrgUnitPath
+    [string]$TargetDomainName = $FullyParsedXMLMatrix.InfoDomainConnection.GoToDomain.DomainName
+
+    # Resolve naming structures and fire domain sequence engines
+$CurrentSerial = (Get-CimInstance -ClassName Win32_Bios).SerialNumber.Trim()
+$CN = "$($ChassisClassification.ThisPCCharset)$($DetectedSiteObject.SiteID)-$($CurrentSerial)"
+
+if ($CN.Length -gt 15) { $CN = $CN.Substring(0, 15) }
+# Truncate to comply with global NetBIOS sizing limits
+Start-RenameOldName -NewComputerName $CN
+
+#Request staging permissions securely before domain injection workflows
+
+if ([string]::IsNullOrEmpty($CredentialContainerObject.DNUN)) {Write-Host "`nEnter domain administrative authorization accounts securely:" -ForegroundColor Yellow
+$secureCreds = Get-Credential
+$CredentialContainerObject.DNUN = $secureCreds.UserName
+$CredentialContainerObject.Password = $secureCreds.GetNetworkCredential().Password}
+$joinResult = Jn_W7
+
+    if ($joinResult -eq 0) {
+        Write-Host "`n[Matrix Engine] System successfully staged, named, and enrolled inside target Active Directory node!" -ForegroundColor Green;
+        Restart-Computer -Force -Confirm:$false }
+    else {
+        Write-Host "`n[Matrix Engine] Critical Failure: Domain enrollment denied with API code exception: $joinResult" -ForegroundColor Red
+        }
